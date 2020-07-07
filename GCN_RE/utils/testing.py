@@ -23,40 +23,41 @@ def bin_data_into_buckets(data, batch_size):
             buckets.append(chunk)
     return buckets
 
-def get_gcn_results(gcn_model, data, maxlength, threshold):
+def get_gcn_results(gcn_model, data, maxlength,batch_size, RE_filename, threshold):
     import numpy as np
 
-    from .auxiliary import create_graph_from_sentence_and_word_vectors
-    from .auxiliary import create_full_sentence
-    from .auxiliary import get_value_matrix
+    import GCN_RE.utils.auxiliary as aux
 
     true_positive = 0
-    pre_sum = 0
-    total_sum = 0
+    pre_sum = 1
+    total_sum = 1
 
     tp_normal = 0
-    pre_sum_normal = 0
-    total_sum_normal = 0
+    pre_sum_normal = 1
+    total_sum_normal = 1
 
     tp_overlap = 0
-    pre_sum_overlap = 0
-    total_sum_overlap = 0
+    pre_sum_overlap = 1
+    total_sum_overlap = 1
 
     true_positive_now = 0
-    pre_sum_now = 0
-    total_sum_now = 0
+    pre_sum_now = 1
+    total_sum_now = 1
 
     total_sentences = 0
     '''
     words, word_vector, word_isEntity, word_index,  relation_entity, relation_vector
     '''
     batch_cnt = 0
-    batches = bin_data_into_buckets(data, batch_size=100)
+    batches = bin_data_into_buckets(data, batch_size=batch_size)
     for batch in batches:
         gcn_batch = []
         relation_set = []
         for item in batch:
-            batch_cnt += 1
+            '''
+           word_list, word_vector, subj_start, subj_end, obj_start,obj_end, relation_vector
+           '''
+            # print(len(item))
             words = item[0]
             word_embeddings = item[1]
             subj_start = item[2]
@@ -65,24 +66,22 @@ def get_gcn_results(gcn_model, data, maxlength, threshold):
             obj_end = item[5]
             relation_vector = item[6]
             relation_vector = [np.array(relation_vector)]
-            relation_set.append(relation_vector)
-            A_fw, A_bw, A_fw_dig, A_bw_dig, X = \
-                create_graph_from_sentence_and_word_vectors(words, word_embeddings, subj_start, subj_end,
+            A_fw, A_bw, X = \
+                aux.create_graph_from_sentence_and_word_vectors(words, word_embeddings, subj_start, subj_end,
                                                                 obj_start, obj_end, maxlength)
             # print(word_is_entity)
-            value_matrix = get_value_matrix(subj_start, subj_end, obj_start, obj_end, maxlength)
+            # print(value_matrix_1)
+            gcn_batch.append((A_fw, A_bw, X, relation_vector, subj_start, subj_end, obj_start, obj_end))
+            # print(gcn_bucket)
+            # print(len(gcn_bucket))
 
-            total_sentences += 1
-            gcn_batch.append((A_fw, A_bw, X, value_matrix, A_fw_dig, A_bw_dig))
-        if len(gcn_batch) > 1:
-            prediction = gcn_model.predict(gcn_batch)
+        if len(gcn_batch) >= 1:
+            prediction = gcn_model.predict(data=gcn_batch, RE_filename = RE_filename)
+            # if cnt_batch % 1 == 0:
             threhold = threshold
             relation_set = np.array(relation_set)
             relation_set = np.squeeze(relation_set)
             prediction = np.squeeze(np.array(prediction))
-            # print(np.array(prediction).shape)
-            # print(relation_set.shape)
-            # print(prediction)
             for lhs, rhs in zip(prediction, relation_set):
                 relation_num = str(rhs).count("1")
                 lhs = np.array(lhs)
@@ -125,8 +124,8 @@ def get_gcn_results(gcn_model, data, maxlength, threshold):
 
             # print(total_negative)
             if batch_cnt % 100 == 0:
-                precision = true_positive_now/pre_sum_now
-                recall = true_positive_now/total_sum_now
+                precision = true_positive_now/(pre_sum_now+1)
+                recall = true_positive_now/(total_sum_now+1)
                 print("the pre of batch " + str(batch_cnt/100) + " is " + str(true_positive_now/pre_sum_now))
                 print("the rec of batch " + str(batch_cnt / 100) + " is " + str(true_positive_now / total_sum_now))
                 print("the f1 of batch " + str(batch_cnt / 100) + " is " + str(2 * precision * recall / (precision + recall)))

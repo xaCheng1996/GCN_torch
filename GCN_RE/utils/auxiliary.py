@@ -2,6 +2,8 @@ import spacy
 import re
 import numpy as np
 import json
+import torch
+from torch.utils.data import Dataset, DataLoader
 
 parser = spacy.load('en_core_web_md')
 
@@ -70,83 +72,64 @@ def vector_is_empty(vector):
 # get vector from word with Spacy
 
 def get_clean_word_vector(word):
-
+    if word in word_substitutions:
+        word = word_substitutions[word]
     word_vector = np.array(parser.vocab[word].vector, dtype=np.float64)
     if vector_is_empty(word_vector):
         word_vector = default_vector
     return word_vector
 
 def get_relation_vector(relation, relation_class):
-    relation_vector = [0.] * len(relation_class)
+    relation_vector = [0] * len(relation_class)
     try:
         index = relation_class.index(relation)
     except:
         index = 1
-    relation_vector[index] = 1.
+    relation_vector[index] = 100
     return relation_vector
 
-def create_graph_from_sentence_and_word_vectors(words, word_vectors, subj_start, subj_end, obj_start, obj_end, maxlength):
-    from .nlp import SpacyTagger as Tagger, SpacyParser as Parser
-
-    sentence = create_full_sentence(words)
-    sentence = re.sub(r'([a-zA-Z]+)-([a-zA-Z]+)', r' \1_\2 ', sentence)
-
-    tagger = Tagger(sentence)
-    parser = Parser(tagger)
-
+def create_graph_from_sentence_and_word_vectors(words, word_vectors, subj_start, subj_end, obj_start, obj_end, edges):
     X = []
-    A_fw = np.zeros(shape=(maxlength, maxlength))
-    A_bw = np.zeros(shape=(maxlength, maxlength))
-    # A_fw_dig = np.zeros(shape=(maxlength, maxlength))
-    # A_bw_dig = np.zeros(shape=(maxlength, maxlength))
-    for i in range(maxlength):
-        A_fw[i][i] = 1
+    matrix_len = len(words)
+    # print(words)
+    # print(matrix_len)
+    A_fw = np.zeros(shape=(matrix_len, matrix_len))
+    A_bw = np.zeros(shape=(matrix_len, matrix_len))
 
-    for i in range(maxlength):
-        X.append(word_vectors[i])
-    X = np.array(X)
-    # print(sentence)
-    # print("x:"+ str(X.shape))
-    nodes, edges, words, tags, types = parser.execute()
-    # for i in nodes:
-    #     A_fw[i][i] = 1
+    for i in range(matrix_len):
+        A_fw[i][i] = 1
+        A_bw[i][i] = 1
+
+    X.append(word_vectors)
+
     for (word1,word2) in edges:
-        if word1 >= maxlength or word2 >= maxlength:
+        if word1 >= matrix_len or word2 >= matrix_len:
             continue
         else:
-            A_fw[word1][word2] = 1
-            A_fw[word2][word1] = 1
-    # print("A_fw:"+ str(A_fw.shape))
+            A_fw[word1][word2] += 1
+            A_fw[word2][word1] += 1
 
-    # for i in range(maxlength):
-    #     A_fw_dig[i][i] += 1
-    #     for j in range(maxlength):
-    #         A_fw_dig[i][i] += A_fw[i][j]
 
-    edges = parser.execute_layer2(subj_start, subj_end, obj_start, obj_end)
+    for i in range(subj_start, subj_end + 1):
+        for j in range(subj_start, subj_end + 1):
+            A_bw[i][i] += 1
+            A_bw[i][j] += 1
+            A_bw[j][i] += 1
+            A_bw[j][j] += 1
 
-    for (word1, word2) in edges:
-        A_bw[word1][word1] = 1
-        A_bw[word2][word2] = 1
-        A_bw[word1][word2] = 1
-        A_bw[word2][word1] = 1
+    for i in range(obj_start, obj_end+1):
+        for j in range(obj_start, obj_end + 1):
+            A_bw[i][i] += 1
+            A_bw[i][j] += 1
+            A_bw[j][i] += 1
+            A_bw[j][j] += 1
 
-    # print(A_fw)
-    A_fw_dig = np.array(np.sum(A_fw, axis=0))
-    # print(A_fw_dig)
-    A_fw_dig = np.matrix(np.diag(A_fw_dig))
-    # print(A_fw_dig)
-
-    # print(A_bw)
-    A_bw_dig = np.array(np.sum(A_bw, axis=0))
-    # print(A_bw_dig)
-    A_bw_dig = np.matrix(np.diag(A_bw_dig))
-    # print(A_bw_dig)
-    return A_fw, A_bw, A_fw_dig, A_bw_dig, X
+    return A_fw, A_bw, X
 
 
 def get_all_sentence(filename, data_name):
     if data_name == 'TacRED':
+        maxlength = 256
         with open(filename, 'r', encoding='utf-8') as data_input:
             sentences = []
             lines = json.load(data_input)
@@ -157,12 +140,13 @@ def get_all_sentence(filename, data_name):
                 obj_start = line['obj_start']
                 obj_end = line['obj_end']
                 relation = line['relation']
+                edges = line['edges']
 
                 relation_vector = get_relation_vector(relation, relation_TacRED)
                 # print(relation_vector)
                 sentence = list(sentence)
 
-                sentences.append([sentence, subj_start, subj_end, obj_start, obj_end, relation_vector])
+                sentences.append([sentence, subj_start, subj_end, obj_start, obj_end, relation_vector, edges])
             return sentences
     else:
         print("no dataset! ")
@@ -179,33 +163,24 @@ def get_data_from_sentences(sentences, maxlength):
         obj_start = sentence[3]
         obj_end = sentence[4]
         relation_vector = sentence[5]
+        edges = sentence[6]
 
         # print(maxlength)
         for word in word_list:
             word_vector.append(get_clean_word_vector(word))
 
-        if len(word_list) < maxlength:
-            for i in range(maxlength - len(word_list)):
-                word_list.append(_pad_word)
-
-        if len(word_vector) < maxlength:
-            for i in range(maxlength-len(word_vector)):
-                word_vector.append(default_vector)
+        # if len(word_list) < maxlength:
+        #     for i in range(maxlength - len(word_list)):
+        #         word_list.append(_pad_word)
+        #
+        # if len(word_vector) < maxlength:
+        #     for i in range(maxlength-len(word_vector)):
+        #         word_vector.append(default_vector)
 
         if cnt % 5000 == 0:
             print("Have processed data: " + str(cnt))
         cnt += 1
 
-        all_data.append((word_list, word_vector, subj_start, subj_end, obj_start,obj_end, relation_vector))
+        all_data.append((word_list, word_vector, subj_start, subj_end, obj_start,obj_end, relation_vector, edges))
 
     return all_data
-
-
-def get_value_matrix(subj_start, subj_end, obj_start, obj_end, maxlength):
-    # maxlength = 256
-    value_matrix = np.zeros(shape=(maxlength, 200))
-    for i in range(subj_start, subj_end+1):
-        value_matrix[i,0:] = 1
-    for i in range(obj_start, obj_end+1):
-        value_matrix[i,0:] = 1
-    return value_matrix

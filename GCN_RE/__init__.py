@@ -4,14 +4,14 @@ import random
 import sys
 import logging
 
-# import GCN_RE.utils as utils
-from GCN_RE.GCN_model import GCNReModel
+import GCN_RE
+from GCN_RE.GCN_model import Train_and_E
 import GCN_RE.utils as utils
 
 
 class GCNRE:
     _logger = logging.getLogger(__name__)
-    def test(self, RE_filename, dataset, data_name, threshold):
+    def test(self, RE_filename, dataset, data_name, threshold, batch_size):
         '''
         The system tests the current NER model against a text in the CONLL format.
 
@@ -21,9 +21,8 @@ class GCNRE:
         sentences = utils.auxiliary.get_all_sentence(dataset, data_name)
         maxlength = 256
         data = utils.auxiliary.get_data_from_sentences(sentences, maxlength)
-        self.model = GCNReModel(maxlength=maxlength, dropout=1.0)
-        self.model.load_tensorflow(RE_filename)
-        precision, recall ,f1 = utils.testing.get_gcn_results(self.model, data, maxlength, threshold=threshold)
+        self.model = Train_and_E(batch_size)
+        precision, recall ,f1 = utils.testing.get_gcn_results(self.model, data, maxlength, batch_size, RE_filename, threshold=threshold)
         print('precision:', precision)
         print('recall:', recall)
         print('F1:', f1)
